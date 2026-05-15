@@ -324,11 +324,16 @@ class FederatedTrainer:
             # the latest local-trained weights. We leave pi untouched.
             return
         if self.config.assignment == "ifca":
-            # Ghosh et al., NeurIPS 2020. Hard one-hot assignment to the
-            # cluster with the highest accuracy on this client's data.
+            # Ghosh et al., NeurIPS 2020, Algorithm 1: per-round hard
+            # identity selection via argmin local loss on each cluster
+            # model. We use argmax of per-cluster accuracy on the
+            # client's data as a proxy for argmin cross-entropy loss
+            # (the two agree on well-fit linear classifiers). The
+            # original paper uses the most recent round's signal only -
+            # no windowing - so we mirror that here.
             for i in range(N):
-                hist = np.array(self.state.sim_history[i][-self.config.sim_window:])
-                chosen = int(hist.mean(axis=0).argmax())
+                latest = self.state.sim_history[i][-1]
+                chosen = int(np.asarray(latest).argmax())
                 self.state.pi[i] = np.eye(K)[chosen]
             return
         if self.config.assignment == "sattler":

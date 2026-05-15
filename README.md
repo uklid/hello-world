@@ -62,9 +62,18 @@ fairness audit below.
 ## 6-way baseline comparison (assignment step only, no drift)
 
 To respond to "FedSoft alone isn't enough", the trainer now also
-implements the standard CFL baselines and a 5-way comparison runs
+implements the standard CFL baselines and a 6-way comparison runs
 through `experiments/compare_baselines.py`. Results saved to
 `results/baselines.md`.
+
+**Baseline fidelity caveat.** All five competitor methods are
+stripped-down ports that share the same NumPy logistic-regression
+trainer. None of them are line-for-line implementations of the
+original papers. The exact deviations (e.g. FedSoft drops the
+proximal update, Sattler drops the `ε_1, ε_2` gradient-norm gate)
+are documented in [`docs/BASELINES.md`](docs/BASELINES.md). Every
+"X beats Y" finding below should be read as "in the
+stripped-down assignment-step-only forms".
 
 | method | reference | rule |
 |---|---|---|
