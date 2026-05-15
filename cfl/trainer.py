@@ -50,7 +50,7 @@ from znumbers.drift import DriftSignal, numeric_threshold_baseline
 
 @dataclass
 class TrainerConfig:
-    assignment: str = "fedsoft"  # "fedsoft" | "hflts"
+    assignment: str = "fedsoft"  # "fedsoft" | "hflts" | "ifca" | "fedavg" | "local"
     drift: str = "none"  # "none" | "numeric" | "z_cfl"
     # FedSoft softmax temperature: smaller = sharper assignment.
     # 0.05 is well below the FedSoft paper default (~0.25) but is
@@ -84,6 +84,10 @@ class TrainerState:
     sim_history: list[list[np.ndarray]] = field(default_factory=list)
     loss_history: list[list[float]] = field(default_factory=list)
     drift_triggered_per_round: list[np.ndarray] = field(default_factory=list)
+    # Per-client raw local model after the latest local_train. Used by
+    # the ``local`` assignment to bypass cluster aggregation entirely.
+    last_local_W: np.ndarray | None = None
+    last_local_b: np.ndarray | None = None
 
 
 @dataclass
@@ -115,8 +119,13 @@ class FederatedTrainer:
         # symmetry: a uniform pi would make every cluster centroid
         # converge to the same global average after the first
         # aggregation, locking the trainer into a trivial fixed point.
-        init_idx = rng.integers(0, K, size=N)
-        pi = np.eye(K)[init_idx].astype(float)
+        # FedAvg actively WANTS that collapse, so initialise uniformly
+        # in that case.
+        if config.assignment == "fedavg":
+            pi = np.ones((N, K)) / K
+        else:
+            init_idx = rng.integers(0, K, size=N)
+            pi = np.eye(K)[init_idx].astype(float)
         self.state = TrainerState(cluster_W=cluster_W, cluster_b=cluster_b, pi=pi)
         for _ in range(N):
             self.state.sim_history.append([])
@@ -146,7 +155,10 @@ class FederatedTrainer:
         # before the local update has a chance to absorb the shift.
         pre_train_losses = self._compute_losses(train_data)
         local_W, local_b = self._local_train(train_data)
-        self._aggregate_clusters(local_W, local_b)
+        self.state.last_local_W = local_W
+        self.state.last_local_b = local_b
+        if self.config.assignment != "local":
+            self._aggregate_clusters(local_W, local_b)
         sims = self._compute_similarities(train_data)
         self._update_history(sims, pre_train_losses)
         self._update_assignment()
@@ -158,6 +170,11 @@ class FederatedTrainer:
     # ---------- inference ----------
 
     def personalized_model(self, client_idx: int) -> tuple[np.ndarray, float]:
+        if self.config.assignment == "local" and self.state.last_local_W is not None:
+            return (
+                self.state.last_local_W[client_idx],
+                self.state.last_local_b[client_idx],
+            )
         return mix(
             self.state.cluster_W,
             self.state.cluster_b,
@@ -258,6 +275,25 @@ class FederatedTrainer:
     def _update_assignment(self) -> None:
         N = self.cohort.n_clients
         K = self.cohort.n_clusters
+        # Methods that don't read history.
+        if self.config.assignment == "fedavg":
+            # FedAvg: every client contributes to every cluster uniformly.
+            # All cluster centroids collapse to the global FedAvg model.
+            self.state.pi[:] = 1.0 / K
+            return
+        if self.config.assignment == "local":
+            # No FL aggregation; personalized_model() short-circuits to
+            # the latest local-trained weights. We leave pi untouched.
+            return
+        if self.config.assignment == "ifca":
+            # Ghosh et al., NeurIPS 2020. Hard one-hot assignment to the
+            # cluster with the highest accuracy on this client's data.
+            for i in range(N):
+                hist = np.array(self.state.sim_history[i][-self.config.sim_window:])
+                chosen = int(hist.mean(axis=0).argmax())
+                self.state.pi[i] = np.eye(K)[chosen]
+            return
+        # Soft assignment families.
         for i in range(N):
             hist = np.array(self.state.sim_history[i][-self.config.sim_window:])
             if self.config.assignment == "fedsoft":

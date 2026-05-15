@@ -59,6 +59,86 @@ accuracy and the Z-CFL variants both keep `post_FP=0` while the
 average. **But these numbers are hyperparameter-dependent** - see the
 fairness audit below.
 
+## 5-way baseline comparison (assignment step only, no drift)
+
+To respond to "FedSoft alone isn't enough", the trainer now also
+implements the standard CFL baselines and a 5-way comparison runs
+through `experiments/compare_baselines.py`. Results saved to
+`results/baselines.md`.
+
+| method | reference | rule |
+|---|---|---|
+| fedavg | McMahan, AISTATS 2017 | single global model, no clustering |
+| local | - | each client trains alone, no FL |
+| ifca | Ghosh et al., NeurIPS 2020 | hard one-hot to argmax-accuracy cluster |
+| fedsoft | Ruan & Joe-Wong, AAAI 2022 | softmax(mean similarity), simplified |
+| hflts | this prototype | HFLTS envelope -> defuzzify (Gap A) |
+
+5 seeds, 20 rounds, all methods sharing the same local trainer.
+
+### Synthetic (30 clients, 3 task profiles, 30 % boundary)
+
+| method | mean_acc | boundary_acc |
+|---|---|---|
+| fedavg | 0.662 ± 0.041 | 0.668 ± 0.040 |
+| local | 0.714 ± 0.023 | 0.644 ± 0.040 |
+| **ifca** | **0.780 ± 0.020** | 0.677 ± 0.044 |
+| fedsoft | 0.739 ± 0.022 | 0.678 ± 0.031 |
+| hflts | 0.751 ± 0.020 | **0.689 ± 0.040** |
+
+- IFCA wins mean accuracy on the synthetic regime.
+- HFLTS wins **boundary-client accuracy** - exactly the metric the
+  Gap A defer-on-overlap motivation targets.
+- HFLTS edges FedSoft on both metrics but the margin to IFCA on
+  mean accuracy is meaningful.
+
+### UCI Adult
+
+| method | mean_acc | boundary_acc |
+|---|---|---|
+| fedavg | 0.862 ± 0.007 | 0.858 ± 0.027 |
+| local | 0.809 ± 0.024 | 0.802 ± 0.044 |
+| ifca | 0.859 ± 0.008 | 0.853 ± 0.017 |
+| **fedsoft** | **0.862 ± 0.007** | 0.856 ± 0.026 |
+| hflts | 0.861 ± 0.007 | 0.857 ± 0.025 |
+
+All four FL methods land at 0.86; local-only is the only loser
+(per-client data alone is too thin). Adult is dominated by a
+globally-good logistic regression, so cluster structure provides
+no signal - any "win" or "loss" between FedAvg / IFCA / FedSoft /
+HFLTS is rounding.
+
+### UCI HAR
+
+| method | mean_acc | boundary_acc |
+|---|---|---|
+| fedavg | **0.953 ± 0.005** | 0.951 ± 0.007 |
+| local | 0.584 ± 0.029 | 0.580 ± 0.029 |
+| ifca | 0.953 ± 0.002 | 0.949 ± 0.007 |
+| fedsoft | 0.950 ± 0.003 | 0.949 ± 0.008 |
+| hflts | 0.951 ± 0.005 | 0.949 ± 0.008 |
+
+Same pattern as Adult: all clustering methods tie at ~0.95.
+Local-only collapses to 0.58 because individual subjects do not
+have enough data to learn the 6-way activity classifier from
+scratch. The federated signal matters; the cluster signal does
+not on this dataset.
+
+### What the 5-way comparison tells us
+
+- HFLTS-CFL is **competitive** across all three datasets - never the
+  worst, never far from the best. On synthetic boundary-client
+  accuracy (the metric the prototype was designed for) it wins.
+- IFCA's hard clustering is a strong baseline on synthetic; HFLTS
+  trails it on mean accuracy. The honest Gap A story is therefore:
+  "HFLTS matches or modestly beats soft baselines (FedSoft) and
+  wins on boundary clients, but does not strictly dominate hard
+  clustering (IFCA) on clean cluster structure."
+- On real tabular data with a logistic-regression-friendly target
+  (Adult, HAR), the choice of clustering algorithm is dwarfed by
+  the choice of "do FL at all" (huge gap between local and
+  everyone else on HAR).
+
 ## Tabular benchmark results
 
 Both prototypes were rerun on two real tabular CFL-style datasets to
