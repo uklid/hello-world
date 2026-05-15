@@ -51,3 +51,15 @@ DEFAULT_TERMS_7 = (
 
 def default_term_set() -> LinguisticTermSet:
     return LinguisticTermSet(terms=DEFAULT_TERMS_7)
+
+
+def uniform_term_set(n_terms: int) -> LinguisticTermSet:
+    """Generate a synthetic ordered term set of `n_terms` size.
+
+    Names are ``s0, s1, ..., s_{n-1}``. Useful for granularity sweeps
+    where the linguistic labels themselves do not matter, only the
+    ordering and resolution.
+    """
+    if n_terms < 3:
+        raise ValueError("need at least 3 terms")
+    return LinguisticTermSet(terms=tuple(f"s{i}" for i in range(n_terms)))

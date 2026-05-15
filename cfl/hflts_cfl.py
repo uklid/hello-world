@@ -81,12 +81,57 @@ class HFLTSCFLServer:
             for k in range(self.n_clusters)
         ]
 
-    def defuzzify(self, hflts_list: list[HFLTS]) -> np.ndarray:
-        """Midpoint-based defuzzification to a mixture weight vector."""
-        mids = np.array([h.midpoint() for h in hflts_list], dtype=float)
-        if mids.sum() <= 0:
-            return np.ones_like(mids) / len(mids)
-        return mids / mids.sum()
+    def defuzzify(
+        self,
+        hflts_list: list[HFLTS],
+        *,
+        method: str = "midpoint",
+        softmax_tau: float = 1.0,
+        hesitation_penalty: float = 0.0,
+    ) -> np.ndarray:
+        """Defuzzify a list of per-cluster HFLTS to a mixture weight vector.
+
+        Methods (selected based on the Liao-Xu-Zeng 2014 score and the
+        wider HFLTS aggregation literature):
+
+        - ``midpoint``: renormalize envelope midpoints into a simplex
+          (lossy at boundary clients where midpoints tie).
+        - ``midpoint_softmax``: softmax of midpoints with temperature
+          ``softmax_tau``; preserves continuous separation while keeping
+          the HFLTS as the auditable artifact.
+        - ``upper``: renormalize envelope upper bounds (optimistic).
+        - ``score_penalty``: score(h) = midpoint - hesitation_penalty *
+          width; rewards narrow envelopes (high confidence), so a
+          tight ``high`` beats an overlapping ``between low and high``.
+        """
+        if not hflts_list:
+            raise ValueError("hflts_list must be non-empty")
+        if method == "midpoint":
+            scores = np.array([h.midpoint() for h in hflts_list], dtype=float)
+            if scores.sum() <= 0:
+                return np.ones_like(scores) / len(scores)
+            return scores / scores.sum()
+        if method == "midpoint_softmax":
+            mids = np.array([h.midpoint() for h in hflts_list], dtype=float)
+            logits = mids / max(softmax_tau, 1e-9)
+            logits = logits - logits.max()
+            weights = np.exp(logits)
+            return weights / weights.sum()
+        if method == "upper":
+            uppers = np.array([h.upper for h in hflts_list], dtype=float)
+            if uppers.sum() <= 0:
+                return np.ones_like(uppers) / len(uppers)
+            return uppers / uppers.sum()
+        if method == "score_penalty":
+            scores = np.array(
+                [h.midpoint() - hesitation_penalty * h.hesitation_width()
+                 for h in hflts_list],
+                dtype=float,
+            )
+            # Shift so all scores are non-negative before normalizing.
+            scores = scores - scores.min() + 1e-9
+            return scores / scores.sum()
+        raise ValueError(f"unknown defuzzify method {method!r}")
 
     def describe(self, hflts_list: list[HFLTS]) -> list[str]:
         """One comparative expression per cluster, suitable for logging."""

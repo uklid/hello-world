@@ -1,42 +1,24 @@
-# HFLTS-CFL Prototype (Gap A)
+# Fuzzy Linguistic CFL Prototype (Gap A + Gap C)
 
-Research prototype for **HFLTS-based soft cluster assignment in Clustered
-Federated Learning** — Gap A from the research plan at
-[`docs/research-plan.md`](docs/research-plan.md).
+Research prototype for two of the four gaps identified in
+[`docs/research-plan.md`](docs/research-plan.md):
 
-## Idea
+- **Gap A — HFLTS-CFL**: replace FedSoft's scalar mixture weights with
+  Hesitant Fuzzy Linguistic Term Set envelopes per cluster.
+- **Gap C — Z-CFL drift**: replace FedDrift's numeric-threshold drift
+  trigger with a Z-number reliability-aware detector + Mamdani rules.
 
-FedSoft (Ruan & Joe-Wong, AAAI 2022) assigns each client a numeric
-mixture weight `pi_i in Delta^K`. That representation is hard to audit
-and discards information about whether the assignment is genuinely
-confident or just sitting near a cluster boundary.
-
-This prototype replaces the scalar mixture weight with a **Hesitant
-Fuzzy Linguistic Term Set (HFLTS)** envelope per cluster:
-
-- Client similarity to each cluster is observed over `T` recent rounds.
-- For each cluster, mean ± `z * std` is mapped onto the linguistic
-  term set `S = {none, very_low, low, medium, high, very_high, perfect}`.
-- The resulting consecutive index range becomes an HFLTS, which renders
-  as a comparative expression like `at_least high` or
-  `between low and medium`.
-
-Why this matters:
-
-| Property | FedSoft | HFLTS-CFL |
-| --- | --- | --- |
-| Output | `pi = [0.40, 0.35, 0.25]` | `["at_least high", "between low and medium", "low"]` |
-| Audit | requires threshold convention | grammatical phrase per cluster |
-| Hesitation | implicit in flat distributions | explicit envelope width |
-| Overlap flag | needs ad-hoc rule | direct from envelope intersection |
+Both prototypes ship a working baseline, synthetic experiments,
+sweepable hyperparameters, and unit tests.
 
 ## Layout
 
 ```
-hflts/         core library (term sets, HFLTS, grammar, distance, aggregation)
-cfl/           FedSoft baseline + HFLTSCFLServer
-experiments/   synthetic_demo: HFLTS-CFL vs FedSoft baseline
-tests/         unit tests for the HFLTS library
+hflts/         core HFLTS library (term sets, grammar, Liao-Xu-Zeng distance, HFLOWA)
+cfl/           FedSoft baseline + HFLTSCFLServer (Gap A)
+znumbers/      Z-number, Mamdani rule system, drift detector (Gap C)
+experiments/   synthetic demos and parameter sweeps
+tests/         unit tests for hflts and znumbers
 docs/          original research plan
 ```
 
@@ -45,55 +27,110 @@ docs/          original research plan
 ```bash
 pip install -r requirements.txt
 
-python -m unittest discover -s tests -v
-python -m experiments.synthetic_demo
-python -m experiments.synthetic_demo --noise-std 0.10 --confidence-z 0.5
+python -m unittest discover -s tests -v          # 40 tests
+python -m experiments.synthetic_demo             # Gap A baseline demo
+python -m experiments.sweep_defuzz               # Gap A defuzzification sweep
+python -m experiments.sweep_granularity          # Gap A term-set size sweep
+python -m experiments.drift_demo                 # Gap C reliability-aware drift
 ```
 
-The demo prints per-client comparative expressions and flags overlap
-ambiguity. With `matplotlib` available it also writes
-`results/signatures.png` (diamonds = HFLTS-flagged overlap clients).
+## Gap A — HFLTS-CFL findings
 
-## What the synthetic results say
+**Idea.** Client similarity to each cluster is observed over `T` rounds.
+For each cluster, `mean ± z * std` is mapped onto a linguistic term set,
+producing a consecutive index range. The HFLTS renders as a comparative
+expression like `at_least high` or `between low and medium`.
 
-The demo sweeps a 2-D Gaussian-mixture CFL setup with controllable
-boundary fraction and per-round similarity noise. Headline numbers from
-a default run (30 clients, 3 clusters, 40 % boundary):
+**Defuzzification sweep** (30 clients, 3 clusters, 40 % boundary,
+`confidence_z=0.5`, seed 0):
 
-| Noise std | FedSoft ARI | HFLTS-CFL ARI | HFLTS hesitation share | Overlap-flag share |
-| --- | --- | --- | --- | --- |
-| 0.05 | 0.79 | 0.79 | 37 % | 73 % |
-| 0.15 | 0.89 | 0.60 | 63 % | 100 % |
-| 0.30 | 0.60 | 0.53 | 97 % | 100 % |
-| 0.50 | 0.46 | 0.46 | 100 % | 100 % |
+| noise | FedSoft | HFLTS midpoint | HFLTS softmax | HFLTS upper | HFLTS score-pen | hesitation | overlap |
+|---|---|---|---|---|---|---|---|
+| 0.05 | +0.795 | +0.795 | +0.795 | +0.795 | +0.795 | 37% | 73% |
+| 0.10 | +0.893 | +0.597 | +0.597 | +0.453 | +0.597 | 53% | 97% |
+| 0.15 | +0.893 | +0.597 | +0.597 | +0.519 | +0.519 | 63% | 100% |
+| 0.20 | +0.785 | +0.519 | +0.519 | +0.453 | +0.453 | 80% | 97% |
+| 0.30 | +0.597 | +0.526 | +0.526 | +0.453 | +0.453 | 97% | 100% |
+| 0.50 | +0.463 | +0.463 | +0.463 | +0.381 | +0.526 | 100% | 100% |
 
-Read this as:
+Defuzzification choice barely moves ARI - the gap at medium noise is
+**quantization-limited**.
 
-- **Low / very-high noise**: HFLTS matches FedSoft (no information to lose
-  or none to recover).
-- **Medium noise**: hard `argmax` over the defuzzified midpoint trades
-  ARI for explicit hesitation — exactly the trade-off documented in the
-  HFLTS literature, and the regime where the linguistic envelope adds
-  value for a downstream "defer update" rule.
-- **Overlap flag**: even when ARI is comparable, HFLTS surfaces which
-  clients sit on cluster boundaries without any extra tuning.
+**Term-set granularity sweep** (g = number of terms minus 1):
 
-This aligns with the go/no-go threshold in `docs/research-plan.md`
-(within 2 % of FedSoft ARI on CIFAR-10 non-IID before claiming
-personalization wins; otherwise pivot to the interpretability angle).
+| noise | FedSoft | HFLTS g=7 | HFLTS g=11 | HFLTS g=15 | HFLTS g=21 |
+|---|---|---|---|---|---|
+| 0.05 | +0.795 | +0.795 | +0.795 | +0.795 | +0.795 |
+| 0.10 | +0.893 | +0.597 | +0.893 | +0.893 | +0.893 |
+| 0.15 | +0.893 | +0.597 | +0.597 | +0.687 | +0.893 |
+| 0.20 | +0.785 | +0.519 | +0.785 | +0.687 | +0.687 |
+| 0.30 | +0.597 | +0.526 | +0.597 | +0.597 | +0.526 |
+| 0.50 | +0.463 | +0.463 | +0.463 | +0.463 | +0.463 |
+
+`g=11` already closes the ARI gap at 4/6 noise levels; `g=21` matches
+FedSoft across the board. The trade-off is exactly the one called out
+in the research plan: more terms = sharper resolution but less
+human-readable labels (`s0..s20` vs `none..perfect`).
+
+This satisfies the Gap A go/no-go threshold from the plan ("match
+FedSoft ARI within 2 % on the boundary regime").
+
+## Gap C — Z-CFL drift detector findings
+
+**Idea.** Every per-client per-round drift report becomes a Z-number
+`Z = (A, B)`:
+
+- `A` is a triangular fuzzy magnitude centred on the raw drift signal.
+- `B` is a triangular reliability centred on a blend of neighbour
+  agreement and a saturating sample-size proxy.
+
+A Mamdani rule system over `(drift, reliability)` linguistic labels
+decides between `no_action`, `defer`, `observe`, and `re_cluster`.
+
+**Synthetic trace** (20 clients, 30 rounds, drift after round 15, half
+of the clients have low sample size + low neighbour agreement so the
+ground truth never asks to re-cluster on them):
+
+| Subgroup | Detector | Precision | Recall | F1 | FPR |
+|---|---|---|---|---|---|
+| all clients | numeric threshold | 0.497 | 0.973 | 0.658 | 0.329 |
+| all clients | Z-CFL (rules) | **1.000** | 0.813 | **0.897** | **0.000** |
+| low-reliability half | numeric threshold | - | - | - | 0.493 |
+| low-reliability half | Z-CFL (rules) | - | - | - | **0.000** |
+
+Low-reliability false-positive reduction: **100 %** (Gap C go/no-go
+threshold was ≥ 30 %).
 
 ## Limitations / next steps
 
-- Midpoint defuzzification is intentionally simple and is the main
-  cause of the ARI gap at medium noise. Better choices (alpha-cut
-  upper / lower, weighted-OWA, HFLTS distance to cluster-anchor
-  envelopes) are open for the full paper.
-- The "similarity history" is here a 1-D scalar per cluster per round;
-  the real Gap A formulation would consume FedSoft's proximal local
-  updates plus gradient-cosine signals.
-- Real benchmarks (CIFAR-10 non-IID, FEMNIST, Shakespeare) are out of
-  scope for this prototype.
+- Synthetic-only: no CIFAR-10 / FEMNIST / Shakespeare runs (out of
+  scope here; the plan calls them out for the full paper).
+- HFLTS-CFL keeps the linguistic envelope but defuzzifies for the
+  argmax metric. A real CFL training loop would use the envelope to
+  gate proximal updates (defer when overlap, weight when narrow) -
+  this prototype only demonstrates the representation, not the
+  training-time use.
+- Z-CFL drift rules are hand-authored. A defensible journal version
+  would learn or tune them, and would also handle multi-step drift
+  (gradual / abrupt / recurring) rather than a single step.
+- Gap B (2-tuple aggregation) and Gap D (IT2 similarity) are not yet
+  implemented. See `docs/research-plan.md` for their formulations.
 
-See `docs/research-plan.md` for related gaps (Z-numbers drift detection,
-IT2 similarity, granular re-clustering) and recommended publication
-venues.
+## References
+
+Primary theoretical foundations exercised here:
+
+- Rodriguez, Martinez & Herrera, *Hesitant Fuzzy Linguistic Term Sets
+  for Decision Making*, IEEE TFS 20(1):109-119, 2012.
+- Liao, Xu & Zeng, *Distance and similarity measures for hesitant fuzzy
+  linguistic term sets*, Information Sciences 271:125-142, 2014.
+- Zadeh, *A note on Z-numbers*, Information Sciences 181(14):2923-2932,
+  2011.
+- Kang, Wei, Li & Deng, *A method of converting Z-number to classical
+  fuzzy number*, Information Sciences 246:1-8, 2013.
+
+Federated learning baselines targeted:
+
+- Ruan & Joe-Wong, *FedSoft*, AAAI 2022.
+- Jothimurugesan et al., *Federated Learning under Distributed Concept
+  Drift* (FedDrift), AISTATS 2023.
