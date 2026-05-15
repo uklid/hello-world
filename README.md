@@ -59,6 +59,66 @@ accuracy and the Z-CFL variants both keep `post_FP=0` while the
 average. **But these numbers are hyperparameter-dependent** - see the
 fairness audit below.
 
+## Tabular benchmark results
+
+Both prototypes were rerun on two real tabular CFL-style datasets to
+sanity-check the synthetic findings. Saved tables live in
+`results/adult.md`, `results/har_easy.md`, `results/har_hard.md`.
+
+### UCI Adult (binary income, profile-partitioned by `education-num`, 3 seeds)
+
+| config | pre_acc | pre_bnd | post_acc | post_bnd | drift_P | drift_R | drift_F1 | post_FP |
+|---|---|---|---|---|---|---|---|---|
+| fedsoft_numeric | 0.854 ± 0.008 | 0.833 ± 0.009 | 0.856 ± 0.009 | 0.833 ± 0.010 | 1.000 | 0.444 | 0.610 | 0.000 |
+| hflts_numeric | 0.854 ± 0.007 | 0.833 ± 0.007 | 0.856 ± 0.008 | 0.832 ± 0.009 | 1.000 | 0.444 | 0.610 | 0.000 |
+| fedsoft_z | 0.854 ± 0.008 | 0.833 ± 0.009 | 0.856 ± 0.009 | 0.833 ± 0.010 | 1.000 | 0.444 | 0.610 | 0.000 |
+| hflts_z | 0.854 ± 0.007 | 0.833 ± 0.007 | 0.856 ± 0.008 | 0.832 ± 0.009 | 1.000 | 0.444 | 0.610 | 0.000 |
+
+All four configurations land within rounding of each other on Adult.
+This dataset is dominated by a globally-good logistic regression so
+clustering does not buy anything; HFLTS-CFL does **not hurt**, but
+there is no accuracy win to claim either.
+
+### UCI HAR (multi-class activity, 30 subjects = 30 clients, 3 seeds)
+
+Easy setup (3 profiles, 25 % boundary, 20 rounds, drift round 15):
+
+| config | pre_acc | pre_bnd | post_acc | post_bnd | drift_P | drift_R | drift_F1 | post_FP |
+|---|---|---|---|---|---|---|---|---|
+| fedsoft_numeric | 0.949 ± 0.001 | 0.955 ± 0.001 | 0.950 ± 0.002 | 0.956 ± 0.008 | 0.815 | 0.259 | 0.336 | 1.667 ± 2.357 |
+| hflts_numeric | 0.947 ± 0.003 | 0.957 ± 0.004 | 0.952 ± 0.001 | 0.956 ± 0.007 | 0.815 | 0.259 | 0.336 | 1.667 ± 2.357 |
+| fedsoft_z | 0.949 ± 0.001 | 0.955 ± 0.001 | 0.950 ± 0.002 | 0.956 ± 0.008 | 0.810 | 0.185 | 0.258 | 1.333 ± 1.886 |
+| hflts_z | 0.947 ± 0.003 | 0.957 ± 0.004 | 0.952 ± 0.001 | 0.956 ± 0.007 | 0.810 | 0.185 | 0.258 | 1.333 ± 1.886 |
+
+Harder setup (5 profiles, 50 % boundary, 25 rounds):
+
+| config | pre_acc | pre_bnd | post_acc | post_bnd | drift_F1 | post_FP |
+|---|---|---|---|---|---|---|
+| fedsoft_numeric | 0.949 ± 0.005 | 0.945 ± 0.006 | 0.962 ± 0.002 | 0.957 ± 0.004 | 0.000 | 0.667 ± 0.471 |
+| hflts_numeric | 0.952 ± 0.003 | 0.950 ± 0.001 | 0.964 ± 0.002 | 0.962 ± 0.003 | 0.067 | 0.333 ± 0.471 |
+| fedsoft_z | 0.949 ± 0.005 | 0.945 ± 0.006 | 0.962 ± 0.002 | 0.957 ± 0.004 | 0.000 | 0.000 ± 0.000 |
+| hflts_z | 0.952 ± 0.003 | 0.950 ± 0.001 | 0.964 ± 0.002 | 0.962 ± 0.003 | 0.000 | 0.000 ± 0.000 |
+
+### What the real-data results say honestly
+
+- **Accuracy**: HFLTS-CFL ≈ FedSoft on both real datasets. On HAR the
+  difference is ≤0.5 pp with overlapping standard deviations; on
+  Adult it is a hard tie. The synthetic +1.8 pp headline does not
+  reproduce on real tabular data with this trainer.
+- **Drift FP**: the synthetic "0 false positives across 10 seeds"
+  result for Z-CFL **does not survive on real data**. On the easy
+  HAR setup both `fedsoft_z` and `hflts_z` average 1.33 ± 1.89 false
+  positives per run. The trend (Z-CFL has fewer FP than the numeric
+  threshold) still holds, but the gap shrinks. On the harder HAR
+  setup Z-CFL recovers to 0.000 false positives.
+- **Practical takeaway**: HFLTS-CFL is **safe** on real tabular
+  benchmarks - it never underperforms FedSoft by more than noise.
+  Its concrete deliverable on these datasets is the interpretable
+  per-client assignment (`at_least s7`, `between s3 and s6`), not a
+  raw accuracy lift. Z-CFL's reliability gate continues to suppress
+  spurious re-cluster triggers, but it is a relative improvement,
+  not a binary "zero false positives" property in the wild.
+
 ## Fairness audit (response to "did we modify FedSoft?")
 
 Two pieces of context the headline table hides:

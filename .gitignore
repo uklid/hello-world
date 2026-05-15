@@ -17,6 +17,5 @@ htmlcov/
 .DS_Store
 .idea/
 .vscode/
-results/
 *.png
 !docs/*.png

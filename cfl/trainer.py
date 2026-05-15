@@ -34,7 +34,15 @@ import numpy as np
 from cfl.baseline import FedSoftServer
 from cfl.data import Cohort
 from cfl.hflts_cfl import HFLTSCFLServer
-from cfl.model import accuracy, gradient_step, logistic_loss, mix
+from cfl.model import (
+    accuracy,
+    gradient_step,
+    logistic_loss,
+    mix,
+    softmax_accuracy,
+    softmax_gradient_step,
+    softmax_loss,
+)
 from hflts.term_set import LinguisticTermSet, uniform_term_set
 from znumbers import ZDriftDetector
 from znumbers.drift import DriftSignal, numeric_threshold_baseline
@@ -95,8 +103,14 @@ class FederatedTrainer:
         n_features = cohort.train[0][0].shape[1]
         K = cohort.n_clusters
         N = cohort.n_clients
-        cluster_W = rng.normal(scale=0.3, size=(K, n_features))
-        cluster_b = np.zeros(K)
+        self._n_classes = cohort.n_classes
+        self._multi = self._n_classes > 2
+        if self._multi:
+            cluster_W = rng.normal(scale=0.05, size=(K, n_features, self._n_classes))
+            cluster_b = np.zeros((K, self._n_classes))
+        else:
+            cluster_W = rng.normal(scale=0.3, size=(K, n_features))
+            cluster_b = np.zeros(K)
         # Random hard one-hot assignment at init to break the soft-CFL
         # symmetry: a uniform pi would make every cluster centroid
         # converge to the same global average after the first
@@ -156,7 +170,25 @@ class FederatedTrainer:
         self, train_data: list[tuple[np.ndarray, np.ndarray]]
     ) -> tuple[np.ndarray, np.ndarray]:
         N = self.cohort.n_clients
-        K = self.cohort.n_clusters
+        if self._multi:
+            d = self.state.cluster_W.shape[1]
+            C = self._n_classes
+            local_W = np.zeros((N, d, C))
+            local_b = np.zeros((N, C))
+            for i in range(N):
+                X, y = train_data[i]
+                W_i, b_i = mix(
+                    self.state.cluster_W, self.state.cluster_b, self.state.pi[i]
+                )
+                W_i, b_i = softmax_gradient_step(
+                    W_i, b_i, X, y,
+                    lr=self.config.local_lr,
+                    n_steps=self.config.local_steps,
+                    l2=self.config.l2,
+                )
+                local_W[i] = W_i
+                local_b[i] = b_i
+            return local_W, local_b
         d = self.state.cluster_W.shape[1]
         local_W = np.zeros((N, d))
         local_b = np.zeros(N)
@@ -166,10 +198,7 @@ class FederatedTrainer:
                 self.state.cluster_W, self.state.cluster_b, self.state.pi[i]
             )
             W_i, b_i = gradient_step(
-                W_i,
-                b_i,
-                X,
-                y,
+                W_i, b_i, X, y,
                 lr=self.config.local_lr,
                 n_steps=self.config.local_steps,
                 l2=self.config.l2,
@@ -180,12 +209,15 @@ class FederatedTrainer:
 
     def _aggregate_clusters(self, local_W: np.ndarray, local_b: np.ndarray) -> None:
         K = self.cohort.n_clusters
-        d = local_W.shape[1]
         for k in range(K):
             w = self.state.pi[:, k]
             denom = max(w.sum(), 1e-9)
-            self.state.cluster_W[k] = (w[:, None] * local_W).sum(axis=0) / denom
-            self.state.cluster_b[k] = float((w * local_b).sum() / denom)
+            if self._multi:
+                self.state.cluster_W[k] = (w[:, None, None] * local_W).sum(axis=0) / denom
+                self.state.cluster_b[k] = (w[:, None] * local_b).sum(axis=0) / denom
+            else:
+                self.state.cluster_W[k] = (w[:, None] * local_W).sum(axis=0) / denom
+                self.state.cluster_b[k] = float((w * local_b).sum() / denom)
 
     def _compute_similarities(
         self, train_data: list[tuple[np.ndarray, np.ndarray]]
@@ -193,10 +225,11 @@ class FederatedTrainer:
         N = self.cohort.n_clients
         K = self.cohort.n_clusters
         sims = np.zeros((N, K))
+        acc = softmax_accuracy if self._multi else accuracy
         for i in range(N):
             X, y = train_data[i]
             for k in range(K):
-                sims[i, k] = accuracy(
+                sims[i, k] = acc(
                     self.state.cluster_W[k], self.state.cluster_b[k], X, y
                 )
         return sims
@@ -206,12 +239,13 @@ class FederatedTrainer:
     ) -> np.ndarray:
         N = self.cohort.n_clients
         losses = np.zeros(N)
+        loss_fn = softmax_loss if self._multi else logistic_loss
         for i in range(N):
             X, y = train_data[i]
             W_i, b_i = mix(
                 self.state.cluster_W, self.state.cluster_b, self.state.pi[i]
             )
-            losses[i] = logistic_loss(W_i, b_i, X, y)
+            losses[i] = loss_fn(W_i, b_i, X, y)
         return losses
 
     def _update_history(
@@ -326,10 +360,11 @@ class FederatedTrainer:
     def _report(self, round_idx: int, drift_actions: np.ndarray) -> RoundReport:
         N = self.cohort.n_clients
         accs = np.zeros(N)
+        acc = softmax_accuracy if self._multi else accuracy
         for i in range(N):
             W_i, b_i = self.personalized_model(i)
             X_test, y_test = self.cohort.test[i]
-            accs[i] = accuracy(W_i, b_i, X_test, y_test)
+            accs[i] = acc(W_i, b_i, X_test, y_test)
         boundary_mask = self.cohort.is_boundary
         if boundary_mask.any():
             boundary_acc = float(accs[boundary_mask].mean())

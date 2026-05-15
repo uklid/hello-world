@@ -57,10 +57,74 @@ def gradient_step(
 
 def mix(
     cluster_W: np.ndarray, cluster_b: np.ndarray, pi: np.ndarray
-) -> tuple[np.ndarray, float]:
-    """Convex combination of K cluster models into a single (W, b)."""
+) -> tuple[np.ndarray, float | np.ndarray]:
+    """Convex combination of K cluster models into a single (W, b).
+
+    Supports both the binary case (``cluster_W`` of shape (K, d) and
+    ``cluster_b`` of shape (K,)) and the multinomial case (``cluster_W``
+    of shape (K, d, C) and ``cluster_b`` of shape (K, C)).
+    """
     if not np.isclose(pi.sum(), 1.0):
         pi = pi / max(pi.sum(), 1e-12)
-    W = (pi[:, None] * cluster_W).sum(axis=0)
-    b = float((pi * cluster_b).sum())
+    if cluster_W.ndim == 2:
+        W = (pi[:, None] * cluster_W).sum(axis=0)
+        b = float((pi * cluster_b).sum())
+        return W, b
+    if cluster_W.ndim == 3:
+        W = (pi[:, None, None] * cluster_W).sum(axis=0)
+        b = (pi[:, None] * cluster_b).sum(axis=0)
+        return W, b
+    raise ValueError(f"unsupported cluster_W ndim={cluster_W.ndim}")
+
+
+# ---------- multinomial logistic regression ----------
+
+
+def _softmax(logits: np.ndarray) -> np.ndarray:
+    shifted = logits - logits.max(axis=1, keepdims=True)
+    ez = np.exp(shifted)
+    return ez / ez.sum(axis=1, keepdims=True)
+
+
+def softmax_predict_proba(W: np.ndarray, b: np.ndarray, X: np.ndarray) -> np.ndarray:
+    """Multinomial probabilities. ``W`` is (d, C), ``b`` is (C,)."""
+    return _softmax(X @ W + b)
+
+
+def softmax_loss(W: np.ndarray, b: np.ndarray, X: np.ndarray, y: np.ndarray) -> float:
+    """Cross-entropy loss, numerically stable."""
+    logits = X @ W + b
+    max_logit = logits.max(axis=1, keepdims=True)
+    log_sum_exp = max_logit + np.log(
+        np.exp(logits - max_logit).sum(axis=1, keepdims=True)
+    )
+    chosen = logits[np.arange(len(y)), y][:, None]
+    return float(np.mean(log_sum_exp - chosen))
+
+
+def softmax_accuracy(W: np.ndarray, b: np.ndarray, X: np.ndarray, y: np.ndarray) -> float:
+    pred = (X @ W + b).argmax(axis=1)
+    return float(np.mean(pred == y))
+
+
+def softmax_gradient_step(
+    W: np.ndarray,
+    b: np.ndarray,
+    X: np.ndarray,
+    y: np.ndarray,
+    lr: float,
+    n_steps: int,
+    l2: float = 0.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    W = W.copy()
+    b = b.copy()
+    n_classes = W.shape[1]
+    Y = np.eye(n_classes)[y]
+    for _ in range(n_steps):
+        P = softmax_predict_proba(W, b, X)
+        diff = P - Y
+        grad_W = X.T @ diff / len(y) + l2 * W
+        grad_b = diff.mean(axis=0)
+        W = W - lr * grad_W
+        b = b - lr * grad_b
     return W, b
