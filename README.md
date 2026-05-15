@@ -39,11 +39,12 @@ python -m experiments.end_to_end_sweep --n-seeds 10    # full CFL training, 10 s
 python -m experiments.inspect_drift                    # diagnostic: per-round drift signals
 ```
 
-## End-to-end results (10 seeds)
+## End-to-end results (10 seeds, default hyperparameters)
 
 30 clients, 3 task clusters, 5-D logistic regression, 30 % boundary
 clients, drift event at round 15 swapping the task of 30 % of the
-non-boundary clients.
+non-boundary clients. All four configurations use the same defaults
+(`softmax_tau=0.05`, `confidence_z=0.5`, `n_terms=11`).
 
 | config | pre_acc | pre_bnd | post_acc | post_bnd | drift_P | drift_R | drift_F1 | post_FP |
 |---|---|---|---|---|---|---|---|---|
@@ -52,23 +53,72 @@ non-boundary clients.
 | fedsoft_z | 0.748 ± 0.019 | 0.700 ± 0.049 | 0.697 ± 0.041 | 0.701 ± 0.052 | 0.700 ± 0.458 | 0.311 ± 0.276 | 0.410 ± 0.315 | 0.000 ± 0.000 |
 | hflts_z | 0.766 ± 0.022 | 0.708 ± 0.057 | 0.703 ± 0.039 | 0.705 ± 0.052 | 0.900 ± 0.300 | 0.511 ± 0.223 | 0.641 ± 0.243 | 0.000 ± 0.000 |
 
-Reading the table:
+At these defaults `hflts_*` clears `fedsoft_*` by 1.8 pp on pre-drift
+accuracy and the Z-CFL variants both keep `post_FP=0` while the
+`hflts_numeric` baseline incurs 0.3 false re-clusters per run on
+average. **But these numbers are hyperparameter-dependent** - see the
+fairness audit below.
 
-- **Gap A in the training loop**: `hflts_*` improves pre-drift mean
-  test accuracy by **+1.8 pp** over `fedsoft_*` (0.766 vs 0.748),
-  consistent across 10 seeds. The headline mechanism is the
-  defer-on-overlap rule: boundary clients whose per-cluster HFLTS
-  envelopes overlap fall back to a uniform mixture rather than
-  over-committing to one cluster.
-- **Gap C in the training loop**: both Z-CFL configurations report
-  **zero false positives** over all 10 seeds (post_FP = 0.000), while
-  `hflts_numeric` records 0.30 spurious re-cluster events per run on
-  average. Z-CFL trades recall (0.51 vs 0.57) for precision and
-  cohort stability - exactly the conservative behaviour the Gap C
-  plan motivated.
-- **Combined `hflts_z`**: dominates the matrix on pre-drift accuracy
-  while keeping zero false positives and matching `hflts_numeric`'s
-  drift recall within one standard deviation.
+## Fairness audit (response to "did we modify FedSoft?")
+
+Two pieces of context the headline table hides:
+
+1. **Simplified FedSoft baseline.** `FedSoftServer` implements only
+   the *assignment* step of FedSoft (softmax of mean similarities). The
+   original FedSoft (Ruan & Joe-Wong, AAAI 2022) additionally runs a
+   proximal local update. Both methods use the same local trainer
+   here, so the comparison isolates the assignment step rather than
+   the full algorithm.
+2. **Tuning matters more than the assignment rule.** With drift
+   disabled and 10 seeds, the FedSoft baseline's accuracy is highly
+   sensitive to `softmax_tau`:
+
+| tau | fedsoft_plain | fedsoft_defer | hflts_no_defer |
+|---|---|---|---|
+| 0.025 | 0.770 ± 0.020 | 0.766 ± 0.021 | 0.759 ± 0.020 |
+| 0.050 | 0.747 ± 0.024 | 0.735 ± 0.031 | 0.759 ± 0.020 |
+| 0.100 | 0.706 ± 0.046 | 0.692 ± 0.057 | 0.759 ± 0.020 |
+| 0.150 | 0.680 ± 0.067 | 0.679 ± 0.068 | 0.759 ± 0.020 |
+| 0.250 | 0.679 ± 0.068 | 0.680 ± 0.067 | 0.759 ± 0.020 |
+| 0.500 | 0.680 ± 0.067 | 0.680 ± 0.067 | 0.759 ± 0.020 |
+
+At `tau=0.025` plain FedSoft *beats* HFLTS-CFL at our default
+hyperparameters (0.770 vs 0.759). At `tau=0.05` and above, HFLTS wins.
+The original tau choice (0.05) inadvertently favoured HFLTS in the
+headline run. HFLTS itself is invariant to `softmax_tau` (it does not
+use that knob) so its column is flat - this is the robustness side
+of the comparison.
+
+**Tuned vs tuned**:
+
+| method | best config | mean_acc | std |
+|---|---|---|---|
+| FedSoft (plain) | tau=0.025 | 0.770 | 0.020 |
+| HFLTS-CFL (no-defer) | defuzz_tau=0.05, z=0.8, n_terms=15 | **0.782** | 0.024 |
+
+Tuned HFLTS still leads by ~1.2 pp but the standard deviations
+overlap; with 10 seeds this is **not statistically significant** at
+p<0.05. The honest Gap A claim is therefore:
+
+- Tuned vs tuned, HFLTS-CFL matches or modestly beats simplified
+  FedSoft on this synthetic regime.
+- HFLTS is more **robust to hyperparameter choice** (its accuracy
+  does not depend on the assignment-step temperature).
+- HFLTS provides **interpretable assignments** as comparative
+  expressions (`at_least s7`, `between s3 and s6`) - the
+  representation, not the accuracy, is the main contribution.
+
+The defer-on-overlap rule, which we initially expected to be a
+significant contributor, actually does **nothing** on top of the
+HFLTS representation in this regime (`hflts_no_defer == hflts_defer`
+in the ablation). When ported to a setting where envelopes routinely
+overlap, the rule may earn its keep; here it does not, and we say so
+rather than counting it as a win.
+
+Gap C's "zero false positives" headline is **not** affected by the
+audit: Z-CFL never re-clusters spuriously across 10 seeds in either
+the FedSoft or HFLTS column, independent of `softmax_tau`. That
+finding survives the fairness check.
 
 ## Honest debugging notes
 

@@ -52,6 +52,10 @@ class TrainerConfig:
     confidence_z: float = 0.5
     n_terms: int = 11
     hflts_defer_on_overlap: bool = True
+    # Symmetric defer rule for the FedSoft baseline: when no cluster's
+    # posterior reaches this threshold, fall back to a uniform mixture.
+    # ``None`` disables the rule and reproduces the plain FedSoft path.
+    fedsoft_defer_max_pi: float | None = None
     hflts_defuzz_method: str = "midpoint_softmax"
     hflts_defuzz_softmax_tau: float = 0.3
     hflts_overlap_min: int = 2  # require overlap of >=2 terms to defer
@@ -104,7 +108,11 @@ class FederatedTrainer:
             self.state.sim_history.append([])
             self.state.loss_history.append([])
 
-        self._fedsoft = FedSoftServer(n_clusters=K, softmax_tau=config.softmax_tau)
+        self._fedsoft = FedSoftServer(
+            n_clusters=K,
+            softmax_tau=config.softmax_tau,
+            defer_max_pi=config.fedsoft_defer_max_pi,
+        )
         self._term_set: LinguisticTermSet = uniform_term_set(config.n_terms)
         self._hflts = HFLTSCFLServer(
             n_clusters=K,
