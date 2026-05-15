@@ -191,7 +191,12 @@ def make_cohort(
 # ---------- UCI Adult tabular cohort (binary income classification) ----------
 
 
-def _load_adult_cached(cache_dir: str = "/tmp/cfl_data_cache") -> tuple[np.ndarray, np.ndarray, list[str]]:
+def _default_cache_dir() -> str:
+    import os
+    return os.environ.get("CFL_DATA_CACHE", "/tmp/cfl_data_cache")
+
+
+def _load_adult_cached(cache_dir: str | None = None) -> tuple[np.ndarray, np.ndarray, list[str]]:
     """Load UCI Adult via sklearn.fetch_openml, cached to disk.
 
     Returns
@@ -203,6 +208,8 @@ def _load_adult_cached(cache_dir: str = "/tmp/cfl_data_cache") -> tuple[np.ndarr
     import os
     import pickle
 
+    if cache_dir is None:
+        cache_dir = _default_cache_dir()
     os.makedirs(cache_dir, exist_ok=True)
     cache_path = os.path.join(cache_dir, "adult.pkl")
     if os.path.exists(cache_path):
@@ -385,7 +392,7 @@ def make_adult_cohort(
 # ---------- UCI HAR cohort (multi-class activity recognition, natural FL) ----------
 
 
-def _load_har_cached(cache_dir: str = "/tmp/cfl_data_cache") -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _load_har_cached(cache_dir: str | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Load UCI HAR via fetch_openml, cached. Returns (X, y, subject_id).
 
     HAR contains 561 statistical features per accelerometer/gyroscope
@@ -395,6 +402,8 @@ def _load_har_cached(cache_dir: str = "/tmp/cfl_data_cache") -> tuple[np.ndarray
     import os
     import pickle
 
+    if cache_dir is None:
+        cache_dir = _default_cache_dir()
     os.makedirs(cache_dir, exist_ok=True)
     cache_path = os.path.join(cache_dir, "har.pkl")
     if os.path.exists(cache_path):

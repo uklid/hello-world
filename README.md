@@ -16,27 +16,71 @@ training), sweepable hyperparameters, and unit tests.
 ## Layout
 
 ```
-hflts/         core HFLTS library (term sets, grammar, Liao-Xu-Zeng distance, HFLOWA)
 cfl/           FedSoft baseline, HFLTSCFLServer, end-to-end FederatedTrainer
+hflts/         core HFLTS library (term sets, grammar, Liao-Xu-Zeng distance, HFLOWA)
 znumbers/      Z-number, Mamdani rule system, drift detector
 experiments/   representation demos, parameter sweeps, end-to-end runs
-tests/         unit tests for hflts, znumbers, trainer
-docs/          original research plan
+tests/         unit tests (50 tests)
+docs/          research plan and BASELINES.md (implementation fidelity notes)
+results/       saved Markdown tables for every experiment
 ```
 
-## Run
+## Requirements
+
+- Python 3.10+ (uses `from __future__ import annotations` + PEP 604 unions)
+- numpy, pandas, scikit-learn, matplotlib (see `requirements.txt`)
+- Everything is CPU-only NumPy; no PyTorch / no GPU needed. A laptop or
+  CI runner is enough for the full suite (< 1 hour wall time).
+- Tabular cohorts (`adult`, `har`) fetch from OpenML on first run and
+  cache to `$CFL_DATA_CACHE` (default `/tmp/cfl_data_cache`, ~25 MB
+  combined). Override on a per-shell or per-command basis:
+  ```bash
+  export CFL_DATA_CACHE=$HOME/.cache/cfl_data
+  # or
+  make tabular CFL_DATA_CACHE=$HOME/.cache/cfl_data
+  ```
+
+## Reproducing the results
+
+The repo ships a `Makefile` with one target per result block in this
+README. Each target writes a Markdown table to `results/`; the
+already-committed copies are the reference output.
 
 ```bash
-pip install -r requirements.txt
+make install        # pip install -r requirements.txt
+make test           # 50 unit tests, < 1 s
+make quick          # smoke check: synthetic_demo + drift_demo
+make synthetic      # end-to-end sweep on synthetic (10 seeds, ~2 min)
+make tabular        # UCI Adult + HAR (~10 min, first run downloads ~25 MB)
+make baselines      # 6-way method comparison across all 3 datasets (~5 min)
+make drift          # 4 methods x 2 detectors x 3 datasets (~5 min)
+make sweep          # boundary-fraction regime sweep on synthetic (~3 min)
+make audit          # fairness audits: defuzz, granularity, tau, ablation (~5 min)
+make all            # test + synthetic + tabular + baselines + drift + sweep
+make clean          # drop results/*.md + __pycache__/
+```
 
-python -m unittest discover -s tests -v                # 50 tests
-python -m experiments.synthetic_demo                   # Gap A representation only
-python -m experiments.sweep_defuzz                     # Gap A defuzzification sweep
-python -m experiments.sweep_granularity                # Gap A term-set size sweep
-python -m experiments.drift_demo                       # Gap C reliability-aware drift
-python -m experiments.end_to_end                       # full CFL training, 1 seed
-python -m experiments.end_to_end_sweep --n-seeds 10    # full CFL training, 10 seeds
-python -m experiments.inspect_drift                    # diagnostic: per-round drift signals
+`make help` prints the same list.
+
+Individual scripts also work directly if you need different flags:
+
+```bash
+python -m unittest discover -s tests -v          # 50 unit tests
+python -m experiments.synthetic_demo             # Gap A representation only
+python -m experiments.sweep_defuzz               # Gap A defuzz sweep
+python -m experiments.sweep_granularity          # Gap A term-set size sweep
+python -m experiments.drift_demo                 # Gap C reliability-aware drift
+python -m experiments.end_to_end                 # 1-seed end-to-end on synthetic
+python -m experiments.end_to_end_sweep --n-seeds 10
+python -m experiments.end_to_end_adult --n-seeds 5
+python -m experiments.end_to_end_har   --n-seeds 3
+python -m experiments.compare_baselines --datasets synthetic adult har
+python -m experiments.drift_matrix     --datasets synthetic adult har
+python -m experiments.regime_sweep
+python -m experiments.inspect_drift              # per-round drift signal diagnostic
+python -m experiments.tau_sweep                  # FedSoft tau sensitivity audit
+python -m experiments.hflts_tune                 # HFLTS hyperparameter search
+python -m experiments.ablation                   # HFLTS defer-on-overlap ablation
 ```
 
 ## End-to-end results (10 seeds, default hyperparameters)
