@@ -29,8 +29,12 @@ from cfl.trainer import FederatedTrainer, TrainerConfig
 CONFIGS = {
     "fedsoft_numeric": TrainerConfig(assignment="fedsoft", drift="numeric"),
     "hflts_numeric": TrainerConfig(assignment="hflts", drift="numeric"),
+    "ifca_numeric": TrainerConfig(assignment="ifca", drift="numeric"),
+    "sattler_numeric": TrainerConfig(assignment="sattler", drift="numeric"),
     "fedsoft_z": TrainerConfig(assignment="fedsoft", drift="z_cfl"),
     "hflts_z": TrainerConfig(assignment="hflts", drift="z_cfl"),
+    "ifca_z": TrainerConfig(assignment="ifca", drift="z_cfl"),
+    "sattler_z": TrainerConfig(assignment="sattler", drift="z_cfl"),
 }
 
 

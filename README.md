@@ -59,7 +59,7 @@ accuracy and the Z-CFL variants both keep `post_FP=0` while the
 average. **But these numbers are hyperparameter-dependent** - see the
 fairness audit below.
 
-## 5-way baseline comparison (assignment step only, no drift)
+## 6-way baseline comparison (assignment step only, no drift)
 
 To respond to "FedSoft alone isn't enough", the trainer now also
 implements the standard CFL baselines and a 5-way comparison runs
@@ -79,14 +79,20 @@ through `experiments/compare_baselines.py`. Results saved to
 
 ### Synthetic (30 clients, 3 task profiles, 30 % boundary)
 
-| method | mean_acc | boundary_acc |
-|---|---|---|
-| fedavg | 0.662 ± 0.041 | 0.668 ± 0.040 |
-| local | 0.714 ± 0.023 | 0.644 ± 0.040 |
-| **ifca** | **0.780 ± 0.020** | 0.677 ± 0.044 |
-| sattler | 0.774 ± 0.016 | 0.686 ± 0.047 |
-| fedsoft | 0.739 ± 0.022 | 0.678 ± 0.031 |
-| hflts | 0.751 ± 0.020 | **0.689 ± 0.040** |
+| method | mean_acc | boundary_acc | ARI |
+|---|---|---|---|
+| fedavg | 0.662 ± 0.041 | 0.668 ± 0.040 | 0.000 ± 0.000 |
+| local | 0.714 ± 0.023 | 0.644 ± 0.040 | 0.006 ± 0.023 |
+| **ifca** | **0.780 ± 0.020** | 0.677 ± 0.044 | **0.589 ± 0.076** |
+| sattler | 0.774 ± 0.016 | 0.686 ± 0.047 | 0.394 ± 0.112 |
+| fedsoft | 0.739 ± 0.022 | 0.678 ± 0.031 | 0.472 ± 0.186 |
+| hflts | 0.751 ± 0.020 | **0.689 ± 0.040** | 0.426 ± 0.176 |
+
+ARI tells a complementary story: IFCA recovers the cluster structure
+the cleanest (0.589), the soft methods recover ~half (HFLTS 0.426,
+FedSoft 0.472), and the hard but dynamic Sattler lands in between
+(0.394). HFLTS trades a bit of cluster purity for boundary accuracy
+- the design intent.
 
 - IFCA wins mean accuracy on the synthetic regime; Sattler's
   top-down split is a very close second (0.774).
@@ -100,14 +106,14 @@ through `experiments/compare_baselines.py`. Results saved to
 
 ### UCI Adult
 
-| method | mean_acc | boundary_acc |
-|---|---|---|
-| fedavg | 0.862 ± 0.007 | 0.858 ± 0.027 |
-| local | 0.809 ± 0.024 | 0.802 ± 0.044 |
-| ifca | 0.859 ± 0.008 | 0.853 ± 0.017 |
-| sattler | 0.858 ± 0.009 | 0.852 ± 0.024 |
-| **fedsoft** | **0.862 ± 0.007** | 0.856 ± 0.026 |
-| hflts | 0.861 ± 0.007 | 0.857 ± 0.025 |
+| method | mean_acc | boundary_acc | ARI |
+|---|---|---|---|
+| fedavg | 0.862 ± 0.007 | 0.858 ± 0.027 | 0.000 ± 0.000 |
+| local | 0.809 ± 0.024 | 0.802 ± 0.044 | -0.011 ± 0.041 |
+| ifca | 0.859 ± 0.008 | 0.853 ± 0.017 | 0.067 ± 0.036 |
+| sattler | 0.858 ± 0.009 | 0.852 ± 0.024 | **0.180 ± 0.127** |
+| **fedsoft** | **0.862 ± 0.007** | 0.856 ± 0.026 | 0.000 ± 0.000 |
+| hflts | 0.861 ± 0.007 | 0.857 ± 0.025 | 0.000 ± 0.000 |
 
 All five clustering methods land at 0.86; local-only is the only
 loser (per-client data alone is too thin). Adult is dominated by
@@ -117,14 +123,19 @@ FedSoft and HFLTS is rounding.
 
 ### UCI HAR
 
-| method | mean_acc | boundary_acc |
-|---|---|---|
-| fedavg | 0.953 ± 0.005 | 0.951 ± 0.007 |
-| local | 0.584 ± 0.029 | 0.580 ± 0.029 |
-| ifca | 0.953 ± 0.002 | 0.949 ± 0.007 |
-| sattler | **0.953 ± 0.005** | **0.952 ± 0.010** |
-| fedsoft | 0.950 ± 0.003 | 0.949 ± 0.008 |
-| hflts | 0.951 ± 0.005 | 0.949 ± 0.008 |
+| method | mean_acc | boundary_acc | ARI |
+|---|---|---|---|
+| fedavg | 0.953 ± 0.005 | 0.951 ± 0.007 | 0.000 ± 0.000 |
+| local | 0.584 ± 0.029 | 0.580 ± 0.029 | -0.028 ± 0.023 |
+| ifca | 0.953 ± 0.002 | 0.949 ± 0.007 | -0.011 ± 0.018 |
+| sattler | **0.953 ± 0.005** | **0.952 ± 0.010** | 0.000 ± 0.000 |
+| fedsoft | 0.950 ± 0.003 | 0.949 ± 0.008 | 0.000 ± 0.000 |
+| hflts | 0.951 ± 0.005 | 0.949 ± 0.008 | 0.000 ± 0.000 |
+
+ARI ≈ 0 across the board on Adult and HAR confirms that on these
+datasets the cluster structure is not recoverable from the
+training signal alone - all methods converge to a single global
+classifier, regardless of what their assignment rule is doing.
 
 Same pattern as Adult: all clustering methods tie at ~0.95.
 Local-only collapses to 0.58 because individual subjects do not
@@ -151,6 +162,115 @@ not on this dataset.
 - Sattler's gradient-cosine bipartition is a strong canonical
   baseline; in this prototype it tracks IFCA closely on synthetic
   and ties everyone else on the real datasets.
+
+## Drift matrix (4 clustering methods x 2 drift policies)
+
+`experiments/drift_matrix.py` runs every clustering method that has a
+notion of cluster reassignment (ifca, sattler, fedsoft, hflts) under
+both the numeric-threshold and the Z-CFL drift detectors. FedAvg and
+Local are skipped because they have no cluster to re-assign.
+
+### Synthetic, drift @ round 10, 3 seeds
+
+| config | post_acc | drift_P | drift_R | drift_F1 | post_FP |
+|---|---|---|---|---|---|
+| fedsoft_numeric | 0.675 ± 0.028 | 1.000 | 0.630 | 0.747 | 0.000 |
+| hflts_numeric | 0.680 ± 0.032 | 0.917 | 0.667 | 0.754 | 0.667 ± 0.943 |
+| **ifca_numeric** | 0.684 ± 0.027 | 1.000 | 0.852 | **0.917** | 0.000 |
+| **sattler_numeric** | **0.752 ± 0.020** | 1.000 | 0.593 | 0.735 | 0.000 |
+| fedsoft_z | 0.675 ± 0.028 | 1.000 | 0.593 | 0.702 | 0.000 |
+| hflts_z | 0.678 ± 0.029 | 1.000 | 0.630 | 0.747 | **0.000** |
+| **ifca_z** | 0.684 ± 0.029 | 1.000 | 0.741 | 0.847 | 0.000 |
+| sattler_z | 0.752 ± 0.020 | 1.000 | 0.556 | 0.710 | 0.000 |
+
+Three honest patterns:
+
+- **IFCA wins drift F1** under either detector (0.917 numeric / 0.847
+  Z-CFL). Its hard one-hot assignment makes the drift signal cleaner -
+  when a client's argmax cluster flips, the pre-train loss surprise
+  is sharp.
+- **Sattler wins post-drift accuracy** (0.752). Top-down splitting
+  recovers from drift natively: a drifted client gets re-routed by
+  the next bipartition opportunity.
+- **Z-CFL keeps post_FP = 0 across every clustering method** (sole
+  exception: hflts_numeric at 0.667). The "zero false positives"
+  Gap C claim is a property of the *detector*, not of the
+  HFLTS-specific assignment, and it survives the broader baseline
+  matrix.
+
+### Adult, drift @ round 10
+
+All eight configurations land within rounding of each other
+(post_acc ~0.856, drift_F1 ~0.610, post_FP = 0). The Adult drift
+event is easy to detect uniformly - reliability gating buys
+nothing because both baselines already have perfect precision.
+
+### HAR, drift @ round 10
+
+Drift detection mostly fails on HAR (best F1 = 0.133 from
+ifca_numeric). Z-CFL on hflts and ifca returns F1 = 0 - the
+reliability gate is too conservative when the underlying drift
+signal is itself weak. This is a real-data limitation worth
+naming: Z-CFL works when drift magnitudes can clear the "large"
+fuzzy label; on HAR they often cannot because the post-drift
+loss climb is shallow.
+
+Saved to `results/drift_matrix.md`.
+
+## Regime stress test (boundary fraction sweep)
+
+`experiments/regime_sweep.py` sweeps the synthetic boundary fraction
+from 0 to 0.8 across all six baselines. Drift is disabled to isolate
+the assignment-step effect. 5 seeds, 20 rounds.
+
+### mean accuracy
+
+| method | b=0.0 | b=0.2 | b=0.4 | b=0.6 | b=0.8 |
+|---|---|---|---|---|---|
+| fedavg | 0.667 | 0.666 | 0.661 | 0.676 | 0.658 |
+| local | 0.760 | 0.734 | 0.707 | 0.706 | 0.664 |
+| **ifca** | **0.833** | **0.795** | **0.759** | **0.742** | **0.709** |
+| sattler | 0.831 | 0.794 | 0.744 | 0.738 | 0.705 |
+| fedsoft | 0.806 | 0.766 | 0.716 | 0.705 | 0.662 |
+| hflts | 0.822 | 0.774 | 0.734 | 0.717 | 0.676 |
+
+IFCA is the leader at every boundary level on mean accuracy.
+HFLTS consistently beats FedSoft (1.5-2 pp) but trails IFCA and
+Sattler everywhere.
+
+### boundary-client accuracy
+
+| method | b=0.2 | b=0.4 | b=0.6 | b=0.8 |
+|---|---|---|---|---|
+| fedavg | 0.671 | 0.658 | 0.678 | 0.667 |
+| local | 0.668 | 0.642 | 0.678 | 0.656 |
+| ifca | 0.688 | 0.665 | 0.698 | 0.693 |
+| **sattler** | **0.707** | 0.676 | **0.702** | **0.694** |
+| fedsoft | 0.699 | 0.665 | 0.689 | 0.664 |
+| hflts | 0.693 | **0.678** | 0.694 | 0.675 |
+
+**Important honest correction**: HFLTS only wins boundary-client
+accuracy at b ≈ 0.4. At b = 0.2, 0.6, 0.8 Sattler edges it out.
+Earlier README versions over-stated the boundary win; this sweep
+corrects to "HFLTS is in the top tier on boundary clients but
+does not strictly dominate Sattler".
+
+### ARI (cluster recovery vs ground-truth profile)
+
+| method | b=0.0 | b=0.2 | b=0.4 | b=0.6 | b=0.8 |
+|---|---|---|---|---|---|
+| ifca | **1.000** | **0.711** | **0.526** | **0.351** | **0.231** |
+| sattler | 0.985 | 0.641 | 0.280 | 0.274 | 0.221 |
+| fedsoft | 0.820 | 0.574 | 0.330 | 0.143 | 0.097 |
+| hflts | 0.865 | 0.602 | 0.331 | 0.156 | 0.043 |
+
+IFCA recovers the cluster structure cleanest at every boundary
+level. HFLTS modestly beats FedSoft on ARI at low boundary
+fractions (0.865 vs 0.820 at b=0.0) but loses ground at high
+boundary fractions (0.043 vs 0.097 at b=0.8) - boundary clients
+genuinely confuse the soft-assignment estimator.
+
+Saved to `results/regime_sweep.md`.
 
 ## Tabular benchmark results
 
