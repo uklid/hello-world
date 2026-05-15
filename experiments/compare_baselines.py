@@ -22,7 +22,7 @@ from cfl.data import make_adult_cohort, make_cohort, make_har_cohort
 from cfl.trainer import FederatedTrainer, TrainerConfig
 
 
-METHODS = ["fedavg", "local", "ifca", "fedsoft", "hflts"]
+METHODS = ["fedavg", "local", "ifca", "sattler", "fedsoft", "hflts"]
 
 
 def build_cohort(dataset: str, seed: int):

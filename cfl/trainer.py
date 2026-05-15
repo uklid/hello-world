@@ -50,7 +50,14 @@ from znumbers.drift import DriftSignal, numeric_threshold_baseline
 
 @dataclass
 class TrainerConfig:
-    assignment: str = "fedsoft"  # "fedsoft" | "hflts" | "ifca" | "fedavg" | "local"
+    assignment: str = "fedsoft"  # "fedsoft" | "hflts" | "ifca" | "fedavg" | "local" | "sattler"
+    # Sattler et al., IEEE TNNLS 32(8):3710-3722, 2021. Top-down
+    # bipartitioning of a cluster when the gradient-cosine matrix shows
+    # a clear two-group structure.
+    sattler_warmup_rounds: int = 5
+    sattler_split_every: int = 3
+    sattler_split_threshold: float = 0.2  # min cosine must dip below -threshold
+    sattler_min_member_count: int = 2
     drift: str = "none"  # "none" | "numeric" | "z_cfl"
     # FedSoft softmax temperature: smaller = sharper assignment.
     # 0.05 is well below the FedSoft paper default (~0.25) but is
@@ -88,6 +95,11 @@ class TrainerState:
     # the ``local`` assignment to bypass cluster aggregation entirely.
     last_local_W: np.ndarray | None = None
     last_local_b: np.ndarray | None = None
+    # Per-client gradient direction (local_W - pre-train personalized_W).
+    # Populated only when assignment="sattler".
+    last_gradient: np.ndarray | None = None
+    # Sattler top-down assignment: integer cluster id per client.
+    cluster_assignment: np.ndarray | None = None
 
 
 @dataclass
@@ -120,9 +132,13 @@ class FederatedTrainer:
         # converge to the same global average after the first
         # aggregation, locking the trainer into a trivial fixed point.
         # FedAvg actively WANTS that collapse, so initialise uniformly
-        # in that case.
+        # in that case. Sattler starts everyone in cluster 0 and grows
+        # the partition top-down via gradient-cosine bipartitioning.
         if config.assignment == "fedavg":
             pi = np.ones((N, K)) / K
+        elif config.assignment == "sattler":
+            pi = np.zeros((N, K))
+            pi[:, 0] = 1.0
         else:
             init_idx = rng.integers(0, K, size=N)
             pi = np.eye(K)[init_idx].astype(float)
@@ -130,6 +146,8 @@ class FederatedTrainer:
         for _ in range(N):
             self.state.sim_history.append([])
             self.state.loss_history.append([])
+        if config.assignment == "sattler":
+            self.state.cluster_assignment = np.zeros(N, dtype=int)
 
         self._fedsoft = FedSoftServer(
             n_clusters=K,
@@ -154,14 +172,34 @@ class FederatedTrainer:
         # Capture pre-train losses: this is the "drift surprise" signal
         # before the local update has a chance to absorb the shift.
         pre_train_losses = self._compute_losses(train_data)
+        # Snapshot pre-train personalized models for Sattler's gradient
+        # direction (local_W - personalized_W_before_train).
+        pre_train_W: np.ndarray | None = None
+        pre_train_b: np.ndarray | None = None
+        if self.config.assignment == "sattler":
+            N = self.cohort.n_clients
+            if self._multi:
+                pre_train_W = np.zeros((N, *self.state.cluster_W.shape[1:]))
+                pre_train_b = np.zeros((N, self._n_classes))
+            else:
+                pre_train_W = np.zeros((N, self.state.cluster_W.shape[1]))
+                pre_train_b = np.zeros(N)
+            for i in range(N):
+                W_i, b_i = mix(
+                    self.state.cluster_W, self.state.cluster_b, self.state.pi[i]
+                )
+                pre_train_W[i] = W_i
+                pre_train_b[i] = b_i
         local_W, local_b = self._local_train(train_data)
         self.state.last_local_W = local_W
         self.state.last_local_b = local_b
+        if self.config.assignment == "sattler" and pre_train_W is not None:
+            self.state.last_gradient = local_W - pre_train_W
         if self.config.assignment != "local":
             self._aggregate_clusters(local_W, local_b)
         sims = self._compute_similarities(train_data)
         self._update_history(sims, pre_train_losses)
-        self._update_assignment()
+        self._update_assignment(round_idx=round_idx)
         drift_actions = self._run_drift_detector(train_data)
         report = self._report(round_idx, drift_actions)
         self.state.drift_triggered_per_round.append(drift_actions)
@@ -272,7 +310,7 @@ class FederatedTrainer:
             self.state.sim_history[i].append(sims[i])
             self.state.loss_history[i].append(float(pre_train_losses[i]))
 
-    def _update_assignment(self) -> None:
+    def _update_assignment(self, round_idx: int = 0) -> None:
         N = self.cohort.n_clients
         K = self.cohort.n_clusters
         # Methods that don't read history.
@@ -292,6 +330,9 @@ class FederatedTrainer:
                 hist = np.array(self.state.sim_history[i][-self.config.sim_window:])
                 chosen = int(hist.mean(axis=0).argmax())
                 self.state.pi[i] = np.eye(K)[chosen]
+            return
+        if self.config.assignment == "sattler":
+            self._sattler_maybe_split(round_idx)
             return
         # Soft assignment families.
         for i in range(N):
@@ -313,6 +354,76 @@ class FederatedTrainer:
             else:
                 raise ValueError(f"unknown assignment: {self.config.assignment}")
             self.state.pi[i] = pi_i
+
+    def _sattler_maybe_split(self, round_idx: int) -> None:
+        """Top-down bipartition on gradient cosine; Sattler TNNLS 2021.
+
+        Every ``sattler_split_every`` rounds (after a warmup) try to
+        split each currently-active cluster whose pairwise gradient
+        cosine matrix has a clearly negative minimum. Bipartition via
+        the sign of the leading eigenvector of the cosine matrix, the
+        classical spectral relaxation of the 2-way cut. A split is
+        committed only when (a) both halves clear the
+        ``sattler_min_member_count`` threshold and (b) at least one
+        unused cluster slot is available.
+        """
+        if self.state.cluster_assignment is None or self.state.last_gradient is None:
+            return
+        if round_idx < self.config.sattler_warmup_rounds:
+            return
+        if (round_idx - self.config.sattler_warmup_rounds) % max(
+            1, self.config.sattler_split_every
+        ) != 0:
+            return
+        N = self.cohort.n_clients
+        K = self.cohort.n_clusters
+        assignment = self.state.cluster_assignment
+        active = np.unique(assignment)
+        free = [k for k in range(K) if k not in active]
+        if not free:
+            return
+        for c in active:
+            members = np.where(assignment == c)[0]
+            if len(members) < 2 * self.config.sattler_min_member_count:
+                continue
+            grads = self.state.last_gradient[members]
+            grads = grads.reshape(len(members), -1)
+            norms = np.linalg.norm(grads, axis=1, keepdims=True) + 1e-9
+            cos = (grads @ grads.T) / (norms @ norms.T)
+            cos_min_off_diag = cos[~np.eye(len(members), dtype=bool)].min()
+            if cos_min_off_diag > -self.config.sattler_split_threshold:
+                continue
+            # Spectral bipartition: sign of the leading eigenvector of
+            # the cosine matrix (graph adjacency relaxation).
+            eigvals, eigvecs = np.linalg.eigh(cos)
+            u = eigvecs[:, -1]
+            sign_mask = u > u.mean()
+            if (
+                sign_mask.sum() < self.config.sattler_min_member_count
+                or (~sign_mask).sum() < self.config.sattler_min_member_count
+            ):
+                continue
+            new_c = free.pop(0)
+            new_members = members[sign_mask]
+            for m in new_members:
+                self.state.cluster_assignment[m] = new_c
+            # Re-derive one-hot pi from the cluster assignment.
+            self.state.pi[:] = 0.0
+            for i in range(N):
+                self.state.pi[i, self.state.cluster_assignment[i]] = 1.0
+            # Seed the new cluster's centroid from the moved clients'
+            # local models so the next round has a non-degenerate start.
+            if self.state.last_local_W is not None:
+                if self._multi:
+                    self.state.cluster_W[new_c] = self.state.last_local_W[new_members].mean(axis=0)
+                    self.state.cluster_b[new_c] = self.state.last_local_b[new_members].mean(axis=0)
+                else:
+                    self.state.cluster_W[new_c] = self.state.last_local_W[new_members].mean(axis=0)
+                    self.state.cluster_b[new_c] = float(
+                        self.state.last_local_b[new_members].mean()
+                    )
+            if not free:
+                return
 
     def _run_drift_detector(
         self, train_data: list[tuple[np.ndarray, np.ndarray]]

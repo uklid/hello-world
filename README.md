@@ -71,6 +71,7 @@ through `experiments/compare_baselines.py`. Results saved to
 | fedavg | McMahan, AISTATS 2017 | single global model, no clustering |
 | local | - | each client trains alone, no FL |
 | ifca | Ghosh et al., NeurIPS 2020 | hard one-hot to argmax-accuracy cluster |
+| sattler | Sattler et al., IEEE TNNLS 2021 | top-down split via gradient-cosine bipartition |
 | fedsoft | Ruan & Joe-Wong, AAAI 2022 | softmax(mean similarity), simplified |
 | hflts | this prototype | HFLTS envelope -> defuzzify (Gap A) |
 
@@ -83,14 +84,19 @@ through `experiments/compare_baselines.py`. Results saved to
 | fedavg | 0.662 ± 0.041 | 0.668 ± 0.040 |
 | local | 0.714 ± 0.023 | 0.644 ± 0.040 |
 | **ifca** | **0.780 ± 0.020** | 0.677 ± 0.044 |
+| sattler | 0.774 ± 0.016 | 0.686 ± 0.047 |
 | fedsoft | 0.739 ± 0.022 | 0.678 ± 0.031 |
 | hflts | 0.751 ± 0.020 | **0.689 ± 0.040** |
 
-- IFCA wins mean accuracy on the synthetic regime.
+- IFCA wins mean accuracy on the synthetic regime; Sattler's
+  top-down split is a very close second (0.774).
 - HFLTS wins **boundary-client accuracy** - exactly the metric the
-  Gap A defer-on-overlap motivation targets.
-- HFLTS edges FedSoft on both metrics but the margin to IFCA on
-  mean accuracy is meaningful.
+  Gap A defer-on-overlap motivation targets - by 0.3-1.2 pp over
+  every hard-clustering baseline.
+- Hard clustering (IFCA, Sattler) wins on mean; soft clustering
+  (HFLTS, FedSoft) wins on the boundary subset. This is the
+  honest cut: HFLTS targets the boundary regime, and that is
+  where it shows up.
 
 ### UCI Adult
 
@@ -99,22 +105,24 @@ through `experiments/compare_baselines.py`. Results saved to
 | fedavg | 0.862 ± 0.007 | 0.858 ± 0.027 |
 | local | 0.809 ± 0.024 | 0.802 ± 0.044 |
 | ifca | 0.859 ± 0.008 | 0.853 ± 0.017 |
+| sattler | 0.858 ± 0.009 | 0.852 ± 0.024 |
 | **fedsoft** | **0.862 ± 0.007** | 0.856 ± 0.026 |
 | hflts | 0.861 ± 0.007 | 0.857 ± 0.025 |
 
-All four FL methods land at 0.86; local-only is the only loser
-(per-client data alone is too thin). Adult is dominated by a
-globally-good logistic regression, so cluster structure provides
-no signal - any "win" or "loss" between FedAvg / IFCA / FedSoft /
-HFLTS is rounding.
+All five clustering methods land at 0.86; local-only is the only
+loser (per-client data alone is too thin). Adult is dominated by
+a globally-good logistic regression, so cluster structure
+provides no signal - the gap between FedAvg, IFCA, Sattler,
+FedSoft and HFLTS is rounding.
 
 ### UCI HAR
 
 | method | mean_acc | boundary_acc |
 |---|---|---|
-| fedavg | **0.953 ± 0.005** | 0.951 ± 0.007 |
+| fedavg | 0.953 ± 0.005 | 0.951 ± 0.007 |
 | local | 0.584 ± 0.029 | 0.580 ± 0.029 |
 | ifca | 0.953 ± 0.002 | 0.949 ± 0.007 |
+| sattler | **0.953 ± 0.005** | **0.952 ± 0.010** |
 | fedsoft | 0.950 ± 0.003 | 0.949 ± 0.008 |
 | hflts | 0.951 ± 0.005 | 0.949 ± 0.008 |
 
@@ -124,20 +132,25 @@ have enough data to learn the 6-way activity classifier from
 scratch. The federated signal matters; the cluster signal does
 not on this dataset.
 
-### What the 5-way comparison tells us
+### What the 6-way comparison tells us
 
 - HFLTS-CFL is **competitive** across all three datasets - never the
-  worst, never far from the best. On synthetic boundary-client
-  accuracy (the metric the prototype was designed for) it wins.
-- IFCA's hard clustering is a strong baseline on synthetic; HFLTS
-  trails it on mean accuracy. The honest Gap A story is therefore:
-  "HFLTS matches or modestly beats soft baselines (FedSoft) and
-  wins on boundary clients, but does not strictly dominate hard
-  clustering (IFCA) on clean cluster structure."
+  worst, never far from the best.
+- On the metric the prototype was designed for (synthetic
+  boundary-client accuracy), HFLTS leads every hard-clustering
+  baseline (IFCA, Sattler) and the soft baseline (FedSoft).
+- On mean accuracy, hard clustering (IFCA, Sattler) wins on
+  synthetic - they commit to a single cluster per client, which
+  is the right move when the task structure is clean. HFLTS
+  trails by ~3 pp on this regime.
 - On real tabular data with a logistic-regression-friendly target
   (Adult, HAR), the choice of clustering algorithm is dwarfed by
-  the choice of "do FL at all" (huge gap between local and
-  everyone else on HAR).
+  the choice of "do FL at all" (the gap between local-only and
+  everyone else on HAR is ~37 pp; the gap between FedAvg and any
+  CFL method is ~0 pp).
+- Sattler's gradient-cosine bipartition is a strong canonical
+  baseline; in this prototype it tracks IFCA closely on synthetic
+  and ties everyone else on the real datasets.
 
 ## Tabular benchmark results
 
