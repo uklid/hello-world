@@ -80,17 +80,23 @@ class FuzzyRule:
 
 
 def default_drift_rules() -> list[FuzzyRule]:
-    """Default rules expressing the Gap C motivation.
+    """Default rules covering every (drift, reliability) cell.
 
-    Re-cluster only when drift is large and reliability is high.
-    Defer when reliability is low or drift is moderate.
-    Do nothing when there is no detectable drift.
+    Gap C motivation: re-cluster only when both the magnitude is high
+    and the reliability is high. Downgrade to ``observe`` when one of
+    the two is medium, and ``defer`` when reliability is low. The
+    severe+medium and severe+low cells are explicit (a previous
+    version of these rules left them undefined, which let mag=1.0
+    + low-agreement signals fall through to the implicit no_action
+    default).
     """
     return [
         FuzzyRule("severe", "high", "re_cluster"),
+        FuzzyRule("severe", "medium", "observe"),
+        FuzzyRule("severe", "low", "defer"),
         FuzzyRule("large", "high", "re_cluster"),
         FuzzyRule("large", "medium", "observe"),
-        FuzzyRule("large", "low", "observe"),
+        FuzzyRule("large", "low", "defer"),
         FuzzyRule("moderate", "high", "observe"),
         FuzzyRule("moderate", "medium", "observe"),
         FuzzyRule("moderate", "low", "defer"),
